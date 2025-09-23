@@ -709,6 +709,8 @@ npm run dev:http       # HTTP dev mode
 - [Transactional Updates](./docs/transactional-updates-example.md) - Two-pass workflow editing
 - [MCP Essentials](./docs/MCP_ESSENTIALS_README.md) - AI-optimized tools guide
 - [Validation System](./docs/validation-improvements-v2.4.2.md) - Smart validation profiles
+- [SQLite Functionality](./docs/SQLITE_FUNCTIONALITY_EN.md) - Database capabilities and installation methods
+- [Funkcjonalność SQLite](./docs/SQLITE_FUNCTIONALITY_PL.md) - Możliwości bazy danych i metody instalacji (Polish)
 
 ### Development & Deployment
 - [Railway Deployment](./docs/RAILWAY_DEPLOYMENT.md) - One-click cloud deployment guide
