@@ -474,7 +474,256 @@ docker exec -it -u root n8n-mcp sh
 4. **Configure backups** for the data volume
 5. **Use secrets management** for AUTH_TOKEN
 
-### Example Production Stack
+### Google Cloud VM Production Deployment
+
+This section documents a complete production setup on Google Cloud VM with proven architecture:
+
+**What you get:**
+- n8n workflow editor with SSL (https://n8n.YOUR_IP.sslip.io)
+- n8n-MCP AI integration (https://mcp.YOUR_IP.sslip.io) 
+- Automatic HTTPS certificates via Caddy
+- Secure internal networking (no exposed ports)
+- Docker volume persistence
+- Easy backup and maintenance
+
+**One-Command Deployment:**
+
+```bash
+# SSH into your Google Cloud VM and run:
+curl -fsSL https://raw.githubusercontent.com/czlonkowski/n8n-mcp/main/deploy/gcp-setup.sh | bash
+```
+
+**Manual Step-by-Step:**
+
+```bash
+# 1. Prepare VM and install Docker
+sudo apt update && sudo apt upgrade -y
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# Logout and login again
+
+# 2. Create deployment directory
+mkdir -p ~/n8n-stack && cd ~/n8n-stack
+
+# 3. Get your VM's external IP
+VM_IP=$(curl -s ifconfig.me)
+echo "Your VM IP: $VM_IP"
+
+# 4. Create environment configuration
+cat > .env << EOF
+# Auto-detected VM IP for sslip.io
+VM_IP=$VM_IP
+
+# n8n Settings
+N8N_HOST=0.0.0.0
+N8N_PORT=5678
+WEBHOOK_URL=https://n8n.${VM_IP}.sslip.io
+N8N_ENCRYPTION_KEY=$(openssl rand -base64 32)
+
+# n8n-MCP Settings
+N8N_MODE=true
+MCP_MODE=http
+N8N_API_URL=http://n8n:5678
+N8N_API_KEY=change-me-after-n8n-setup
+MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+AUTH_TOKEN=$(openssl rand -hex 32)
+
+# Domains (using sslip.io for automatic SSL)
+DOMAIN_N8N=n8n.${VM_IP}.sslip.io
+DOMAIN_MCP=mcp.${VM_IP}.sslip.io
+EOF
+
+# 5. Save your authentication tokens
+echo "=== SAVE THESE AUTHENTICATION TOKENS ==="
+echo "MCP Auth Token: $(grep MCP_AUTH_TOKEN .env | cut -d= -f2)"
+echo "n8n Encryption Key: $(grep N8N_ENCRYPTION_KEY .env | cut -d= -f2)"
+echo "========================================="
+
+# 6. Create Docker Compose stack
+cat > docker-compose.yml << 'EOF'
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=${N8N_PORT}
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - DB_TYPE=sqlite
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - app_network
+
+  n8n-mcp:
+    image: ghcr.io/czlonkowski/n8n-mcp:latest
+    container_name: n8n-mcp
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      - N8N_MODE=${N8N_MODE}
+      - MCP_MODE=${MCP_MODE}
+      - N8N_API_URL=${N8N_API_URL}
+      - N8N_API_KEY=${N8N_API_KEY}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - PORT=3000
+      - LOG_LEVEL=info
+    volumes:
+      - mcp_data:/app/data
+      - mcp_logs:/app/logs
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  n8n_data:
+  mcp_data:
+  mcp_logs:
+  caddy_data:
+  caddy_config:
+EOF
+
+# 7. Create Caddyfile for SSL and reverse proxy
+cat > Caddyfile << EOF
+# n8n workflow editor
+${DOMAIN_N8N} {
+    reverse_proxy n8n:5678
+    header {
+        Strict-Transport-Security max-age=31536000;
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+    }
+}
+
+# n8n-MCP AI service
+${DOMAIN_MCP} {
+    reverse_proxy n8n-mcp:3000
+    header {
+        Strict-Transport-Security max-age=31536000;
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+    }
+}
+EOF
+
+# 8. Configure Google Cloud firewall
+gcloud compute firewall-rules create allow-http-https \
+    --allow tcp:80,tcp:443 \
+    --source-ranges 0.0.0.0/0 \
+    --description "Allow HTTP and HTTPS for n8n stack" \
+    2>/dev/null || echo "Firewall rule already exists"
+
+# 9. Deploy the stack
+docker compose pull
+docker compose up -d
+
+# 10. Wait for startup
+echo "Waiting for services to start..."
+sleep 30
+
+# 11. Verify deployment
+echo "Checking service status..."
+docker compose ps
+
+echo "
+🎉 Deployment Complete!
+
+Your services are running at:
+📝 n8n Editor: https://n8n.${VM_IP}.sslip.io
+🤖 n8n-MCP: https://mcp.${VM_IP}.sslip.io
+
+Next Steps:
+1. Open n8n and create admin account
+2. Go to Settings → API and create API key
+3. Update .env file: N8N_API_KEY=your-new-api-key
+4. Restart MCP: docker compose restart n8n-mcp
+5. Test MCP connection in n8n workflows
+
+Your MCP Auth Token: $(grep MCP_AUTH_TOKEN .env | cut -d= -f2)
+"
+```
+
+**Quick Health Check:**
+
+```bash
+# Verify all services are running
+docker compose ps
+
+# Test external access
+VM_IP=$(curl -s ifconfig.me)
+curl -I https://n8n.${VM_IP}.sslip.io
+curl -I https://mcp.${VM_IP}.sslip.io/health
+
+# Check internal connectivity
+docker compose exec n8n curl -f http://n8n-mcp:3000/health
+
+# View logs if needed
+docker compose logs -f --tail=20
+```
+
+**Integration with n8n:**
+
+After n8n setup, configure the MCP Client Tool node:
+- Server URL: `https://mcp.YOUR_VM_IP.sslip.io/mcp`
+- Auth Token: Your `MCP_AUTH_TOKEN` value  
+- Transport: HTTP Streamable (SSE)
+
+**Backup and Maintenance:**
+
+```bash
+# Backup all data
+mkdir backups
+docker run --rm \
+  -v n8n-stack_n8n_data:/source:ro \
+  -v $(pwd)/backups:/backup \
+  alpine tar czf /backup/n8n-$(date +%Y%m%d).tar.gz -C /source .
+
+docker run --rm \
+  -v n8n-stack_mcp_data:/source:ro \
+  -v $(pwd)/backups:/backup \
+  alpine tar czf /backup/mcp-$(date +%Y%m%d).tar.gz -C /source .
+
+# Update services
+docker compose pull
+docker compose up -d
+
+# View resource usage
+docker stats --no-stream
+```
+
+**Cost Estimation (Google Cloud):**
+- VM: e2-standard-2 (~$50/month)
+- Storage: 20GB SSD (~$3/month)  
+- Network: Egress costs vary by region
+- **Total: ~$55/month for production-ready setup**
 
 ```yaml
 # docker-compose.prod.yml

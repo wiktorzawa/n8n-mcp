@@ -248,7 +248,244 @@ docker run -d \
   n8n-mcp:latest
 ```
 
-#### Full Production Setup (Hetzner/AWS/DigitalOcean)
+#### Full Production Setup (Google Cloud VM)
+
+This section documents a proven production deployment on Google Cloud VM (also works on AWS, DigitalOcean, Hetzner, etc.).
+
+**Architecture Overview:**
+```
+Internet → Caddy (80/443) → Docker Network → n8n (5678) + n8n-MCP (3000)
+```
+
+**Server Requirements:**
+- **VM Type**: e2-standard-2 (2 vCPU, 8GB RAM) on GCP
+- **OS**: Ubuntu 20.04 LTS or newer
+- **Disk**: 20GB persistent SSD minimum
+- **Network**: Allow HTTP/HTTPS traffic in firewall rules
+
+**Complete Setup Script:**
+
+```bash
+# 1. Create project directory
+mkdir -p ~/n8n-production && cd ~/n8n-production
+
+# 2. Generate secure environment variables
+VM_IP=$(curl -s ifconfig.me)
+cat > .env << EOF
+# n8n Configuration
+N8N_HOST=0.0.0.0
+N8N_PORT=5678
+WEBHOOK_URL=https://n8n.${VM_IP}.sslip.io
+N8N_ENCRYPTION_KEY=$(openssl rand -base64 32)
+
+# n8n-MCP Configuration  
+N8N_MODE=true
+MCP_MODE=http
+N8N_API_URL=http://n8n:5678
+N8N_API_KEY=your-n8n-api-key-here
+MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+AUTH_TOKEN=$(openssl rand -hex 32)
+
+# Domain Configuration (using sslip.io for automatic SSL)
+DOMAIN_N8N=n8n.${VM_IP}.sslip.io
+DOMAIN_MCP=mcp.${VM_IP}.sslip.io
+EOF
+
+# Display generated tokens (SAVE THESE!)
+echo "=== IMPORTANT: Save these authentication tokens ==="
+grep -E "(ENCRYPTION_KEY|AUTH_TOKEN)" .env
+echo "=================================================="
+
+# 3. Create Docker Compose configuration
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=${N8N_PORT}
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - DB_TYPE=sqlite
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - web
+
+  n8n-mcp:
+    image: ghcr.io/czlonkowski/n8n-mcp:latest
+    pull_policy: always
+    container_name: n8n-mcp
+    restart: unless-stopped
+    environment:
+      - N8N_MODE=${N8N_MODE}
+      - MCP_MODE=${MCP_MODE}
+      - N8N_API_URL=${N8N_API_URL}
+      - N8N_API_KEY=${N8N_API_KEY}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - PORT=3000
+      - LOG_LEVEL=info
+    volumes:
+      - mcp_data:/app/data
+      - mcp_logs:/app/logs
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  n8n_data:
+  mcp_data:
+  mcp_logs:
+  caddy_data:
+  caddy_config:
+EOF
+
+# 4. Create Caddyfile for reverse proxy with automatic SSL
+cat > Caddyfile << EOF
+# n8n workflow editor
+${DOMAIN_N8N} {
+    reverse_proxy n8n:5678
+    
+    header {
+        Strict-Transport-Security max-age=31536000;
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+    }
+}
+
+# n8n-MCP AI integration service  
+${DOMAIN_MCP} {
+    reverse_proxy n8n-mcp:3000
+    
+    header {
+        Strict-Transport-Security max-age=31536000;
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+    }
+}
+EOF
+
+# 5. Configure Google Cloud firewall (if needed)
+echo "Configuring firewall rules..."
+gcloud compute firewall-rules create allow-http-https \
+    --allow tcp:80,tcp:443 \
+    --source-ranges 0.0.0.0/0 \
+    --description "Allow HTTP and HTTPS traffic" \
+    2>/dev/null || echo "Firewall rule already exists"
+
+# 6. Deploy the stack
+echo "Deploying services..."
+docker compose pull
+docker compose up -d
+
+# 7. Wait for services to start
+echo "Waiting for services to start..."
+sleep 30
+
+# 8. Verify installation
+echo "Verifying installation..."
+docker compose ps
+docker compose logs --tail=10
+
+echo "
+=== Deployment Complete ===
+
+Your services are now running:
+- n8n: https://${DOMAIN_N8N}
+- n8n-MCP: https://${DOMAIN_MCP}
+
+Next steps:
+1. Access n8n at https://${DOMAIN_N8N}
+2. Create admin account and API key
+3. Update N8N_API_KEY in .env file
+4. Restart n8n-mcp: docker compose restart n8n-mcp
+5. Configure MCP Client Tool in n8n workflows
+
+Authentication tokens saved in .env file - keep them secure!
+"
+```
+
+**Post-Deployment Configuration:**
+
+1. **Complete n8n Setup:**
+   ```bash
+   # Access your n8n instance
+   echo "Open: https://$(grep DOMAIN_N8N .env | cut -d= -f2)"
+   
+   # After setting up n8n admin and API key:
+   nano .env  # Update N8N_API_KEY value
+   docker compose restart n8n-mcp
+   ```
+
+2. **Verify MCP Integration:**
+   ```bash
+   # Test MCP endpoint
+   curl -I "https://$(grep DOMAIN_MCP .env | cut -d= -f2)/health"
+   
+   # Test authentication  
+   AUTH_TOKEN=$(grep MCP_AUTH_TOKEN .env | cut -d= -f2)
+   curl -H "Authorization: Bearer $AUTH_TOKEN" \
+        "https://$(grep DOMAIN_MCP .env | cut -d= -f2)/mcp"
+   ```
+
+3. **Configure n8n MCP Client Tool:**
+   - Server URL: `https://mcp.YOUR_VM_IP.sslip.io/mcp`
+   - Auth Token: Your `MCP_AUTH_TOKEN` value
+   - Transport: HTTP Streamable (SSE)
+
+**Data Management:**
+
+```bash
+# Backup data volumes
+docker run --rm -v n8n-production_n8n_data:/source:ro \
+    -v $(pwd):/backup alpine \
+    tar czf /backup/n8n-backup-$(date +%Y%m%d).tar.gz -C /source .
+
+docker run --rm -v n8n-production_mcp_data:/source:ro \
+    -v $(pwd):/backup alpine \
+    tar czf /backup/mcp-backup-$(date +%Y%m%d).tar.gz -C /source .
+
+# View logs
+docker compose logs -f --tail=50
+
+# Update services
+docker compose pull && docker compose up -d
+```
+
+**Security Notes:**
+- SSL certificates are automatically managed by Caddy
+- Internal ports (5678, 3000) are not exposed directly
+- Generated tokens are cryptographically secure
+- Regular security headers are applied
+- Consider adding IP restrictions for sensitive environments
 
 1. **Server Requirements**:
    - **Minimal**: 1 vCPU, 1GB RAM (CX11 on Hetzner)
@@ -697,7 +934,67 @@ grep -i "auth\|token" /var/log/n8n-mcp.log
 grep -i "connection\|network" /var/log/n8n-mcp.log
 ```
 
-### Getting Help
+### Google Cloud VM + sslip.io Specific Issues
+
+**"TLS Certificate Error with localhost"**
+- **Symptom**: `curl https://localhost` returns TLS certificate error
+- **Explanation**: This is expected behavior when using sslip.io certificates
+- **Solution**: Use the proper domain name instead:
+  ```bash
+  # Wrong (will fail with certificate error)
+  curl https://localhost
+  
+  # Correct (using sslip.io domain)
+  VM_IP=$(curl -s ifconfig.me)
+  curl -I https://n8n.${VM_IP}.sslip.io
+  curl -I https://mcp.${VM_IP}.sslip.io/health
+  ```
+
+**"Connection Refused on Public IP"**
+- **Symptom**: Cannot access services on public IP directly
+- **Cause**: Services are only exposed through Caddy reverse proxy
+- **Verification**: This is correct behavior for security
+  ```bash
+  # These should fail (services not directly exposed):
+  curl http://YOUR_VM_IP:5678
+  curl http://YOUR_VM_IP:3000
+  
+  # These should work (through Caddy):
+  curl https://n8n.YOUR_VM_IP.sslip.io
+  curl https://mcp.YOUR_VM_IP.sslip.io/health
+  ```
+
+**"Empty PortBindings in Docker"**
+- **Symptom**: `docker ps` shows empty port bindings for n8n and n8n-mcp
+- **Explanation**: This is correct - only Caddy exposes ports externally
+- **Architecture**: n8n (internal:5678) ← Caddy (external:80/443) → n8n-MCP (internal:3000)
+
+**Google Cloud Firewall Configuration**
+```bash
+# Verify firewall rules are correctly set
+gcloud compute firewall-rules list --format="table(name,direction,allowed[].ports,sourceRanges[]:list)"
+
+# Should show rules allowing tcp:80,tcp:443 from 0.0.0.0/0
+
+# If missing, create the rule:
+gcloud compute firewall-rules create allow-http-https \
+    --allow tcp:80,tcp:443 \
+    --source-ranges 0.0.0.0/0 \
+    --description "Allow HTTP and HTTPS traffic"
+```
+
+**sslip.io Domain Resolution Issues**
+```bash
+# Test DNS resolution
+nslookup n8n.YOUR_VM_IP.sslip.io
+nslookup mcp.YOUR_VM_IP.sslip.io
+
+# Should resolve to YOUR_VM_IP
+
+# If DNS fails, verify your VM's external IP:
+curl -s ifconfig.me
+gcloud compute instances list --format="table(name,status,EXTERNAL_IP)"
+```
 
 If you're still experiencing issues:
 
