@@ -700,6 +700,7 @@ npm run dev:http       # HTTP dev mode
 
 ### Setup Guides
 - [Installation Guide](./docs/INSTALLATION.md) - Comprehensive installation instructions
+  - **NEW**: Production deployment on Google Cloud VM with Caddy reverse proxy and automatic SSL
 - [Claude Desktop Setup](./docs/README_CLAUDE_SETUP.md) - Detailed Claude configuration
 - [Docker Guide](./docs/DOCKER_README.md) - Advanced Docker deployment options
 - [MCP Quick Start](./docs/MCP_QUICK_START_GUIDE.md) - Get started quickly with n8n-MCP
