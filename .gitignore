@@ -140,3 +140,6 @@ n8n-mcp-wrapper.sh
 
 # Telemetry configuration (user-specific)
 ~/.n8n-mcp/
+
+# Production environment files (contain secrets)
+.env.production

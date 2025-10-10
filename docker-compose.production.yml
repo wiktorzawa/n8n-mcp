@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # n8n workflow automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-production
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"  # Tylko lokalny dostęp - Nginx będzie proxy
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_HOST=0.0.0.0  # Bind do wszystkich interfejsów w kontenerze
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true  # Umożliwia używanie community nodes jako AI tools
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - n8n-network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget --quiet --spider --tries=1 --timeout=10 http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Dłuższy czas na migracje bazy danych
+
+  # n8n-mcp server for AI assistance
+  n8n-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: n8n-mcp:latest  # Lokalny obraz zbudowany z develop/production
+    container_name: n8n-mcp-production
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"  # Tylko lokalny dostęp - Nginx będzie proxy
+    environment:
+      - NODE_ENV=production
+      - N8N_MODE=true
+      - MCP_MODE=http
+      - N8N_API_URL=http://n8n:5678/api/v1
+      - N8N_API_KEY=${N8N_API_KEY}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - USE_FIXED_HTTP=true
+      - NODE_DB_PATH=/app/data/nodes.db
+      - REBUILD_ON_START=false
+    volumes:
+      - ./data:/app/data  # Bez :ro - może potrzebować zapisu
+      - mcp_logs:/app/logs
+    networks:
+      - n8n-network
+    depends_on:
+      n8n:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  n8n_data:
+    driver: local
+  mcp_logs:
+    driver: local
+
+networks:
+  n8n-network:
+    driver: bridge
