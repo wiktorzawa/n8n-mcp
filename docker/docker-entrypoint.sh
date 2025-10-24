@@ -81,6 +81,27 @@ if [ ! -f "$DB_PATH" ]; then
                         log_message "ERROR: Database initialization failed" >&2
                         exit 1
                     }
+                    
+                    # Run additional initialization scripts
+                    log_message "Running sanitize-templates..."
+                    cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/sanitize-templates.js || {
+                        log_message "WARNING: sanitize-templates failed" >&2
+                    }
+                    
+                    log_message "Running extract-from-docker..."
+                    cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/extract-from-docker.js || {
+                        log_message "WARNING: extract-from-docker failed" >&2
+                    }
+                    
+                    log_message "Running fetch-templates..."
+                    cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/fetch-templates-robust.js || {
+                        log_message "WARNING: fetch-templates failed" >&2
+                    }
+                    
+                    log_message "Running seed-canonical-ai..."
+                    cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/seed-canonical-ai-examples.js || {
+                        log_message "WARNING: seed-canonical-ai failed" >&2
+                    }
                 fi
             ) 200>"$LOCK_FILE"
         else
@@ -102,6 +123,27 @@ if [ ! -f "$DB_PATH" ]; then
             cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/rebuild.js || {
                 log_message "ERROR: Database initialization failed" >&2
                 exit 1
+            }
+            
+            # Run additional initialization scripts
+            log_message "Running sanitize-templates..."
+            cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/sanitize-templates.js || {
+                log_message "WARNING: sanitize-templates failed" >&2
+            }
+            
+            log_message "Running extract-from-docker..."
+            cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/extract-from-docker.js || {
+                log_message "WARNING: extract-from-docker failed" >&2
+            }
+            
+            log_message "Running fetch-templates..."
+            cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/fetch-templates-robust.js || {
+                log_message "WARNING: fetch-templates failed" >&2
+            }
+            
+            log_message "Running seed-canonical-ai..."
+            cd /app && NODE_DB_PATH="$DB_PATH" node dist/scripts/seed-canonical-ai-examples.js || {
+                log_message "WARNING: seed-canonical-ai failed" >&2
             }
         fi
     fi
